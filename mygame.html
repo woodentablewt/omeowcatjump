@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Cat Platformer</title>
+    <style>
+        body {
+            background: #f7f7f7;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            font-family: monospace;
+        }
+        canvas {
+            border: 4px solid #222;
+            background: #ffffff;
+        }
+        .info {
+            margin-top: 10px;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+
+<canvas id="canvas" width="800" height="400"></canvas>
+<div class="info">A = Left | D = Right | Space = Jump | S = Slam Down | R = Restart | 1 = Speed</div>
+
+<script>
+(function() {
+    var canvas = document.getElementById(String.fromCharCode(99,97,110,118,97,115));
+    var ctx = canvas.getContext(String.fromCharCode(50,100));
+
+    var audioCtx = null;
+
+    function initAudio() {
+        if (!audioCtx) {
+            var AudioContext = window.AudioContext || window.webkitAudioContext;
+            audioCtx = new AudioContext();
+        }
+    }
+
+    function playSound(type) {
+        if (!audioCtx) return;
+        var osc = audioCtx.createOscillator();
+        var gain = audioCtx.createGain();
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        var now = audioCtx.currentTime;
+
+        if (type === 1) { // jump
+            osc.type = String.fromCharCode(115,113,117,97,114,101);
+            osc.frequency.setValueAtTime(150, now);
+            osc.frequency.exponentialRampToValueAtTime(400, now + 0.15);
+            gain.gain.setValueAtTime(0.1, now);
+            gain.gain.linearRampToValueAtTime(0.01, now + 0.15);
+            osc.start(now);
+            osc.stop(now + 0.15);
+        } else if (type === 2) { // slam
+            osc.type = String.fromCharCode(116,114,105,97,110,103,108,101);
+            osc.frequency.setValueAtTime(250, now);
+            osc.frequency.linearRampToValueAtTime(80, now + 0.1);
+            gain.gain.setValueAtTime(0.12, now);
+            gain.gain.linearRampToValueAtTime(0.01, now + 0.1);
+            osc.start(now);
+            osc.stop(now + 0.1);
+        } else if (type === 3) { // coin
+            osc.type = String.fromCharCode(115,105,110,101);
+            osc.frequency.setValueAtTime(987.77, now);
+            osc.frequency.setValueAtTime(1318.51, now + 0.08);
+            gain.gain.setValueAtTime(0.1, now);
+            gain.gain.linearRampToValueAtTime(0.01, now + 0.25);
+            osc.start(now);
+            osc.stop(now + 0.25);
+        } else if (type === 4) { // death
+            osc.type = String.fromCharCode(115,97,119,116,111,111,116,104);
+            osc.frequency.setValueAtTime(300, now);
+            osc.frequency.linearRampToValueAtTime(60, now + 0.3);
+            gain.gain.setValueAtTime(0.15, now);
+            gain.gain.linearRampToValueAtTime(0.01, now + 0.3);
+            osc.start(now);
+            osc.stop(now + 0.3);
+        } else if (type === 5) { // win
+            var notes = [261.63, 329.63, 392.00, 523.25];
+            notes.forEach(function(freq, index) {
+                var o = audioCtx.createOscillator();
+                var g = audioCtx.createGain();
+                o.connect(g);
+                g.connect(audioCtx.destination);
+                o.type = String.fromCharCode(116,114,105,97,110,103,108,101);
+                o.frequency.setValueAtTime(freq, now + index * 0.1);
+                g.gain.setValueAtTime(0.1, now + index * 0.1);
+                g.gain.linearRampToValueAtTime(0.01, now + index * 0.1 + 0.2);
+                o.start(now + index * 0.1);
+                o.stop(now + index * 0.1 + 0.2);
+            });
+        }
+    }
+
+    var gravity = 0.5;
+    var score = 0;
+    var state = 0; // 0: PLAYING, 1: DEAD, 2: WON
+    var keys = { space: false, a: false, d: false, s: false };
+
+    var player = {
+        x: 50, y: 300, w: 28, h: 20, vx: 0, vy: 0,
+        speed: 2.5, jump: -10, grounded: false, facing: 1, // 1: right, -1: left
+        reset: function() {
+            this.x = 50; this.y = 300; this.vx = 0; this.vy = 0;
+            this.grounded = false; this.facing = 1;
+        }
+    };
+
+    var platforms = [
+        { x: 0, y: 360, w: 220, h: 40 },
+        { x: 270, y: 310, w: 90, h: 15 },
+        { x: 400, y: 250, w: 90, h: 15 },
+        { x: 200, y: 190, w: 100, h: 15 },
+        { x: 530, y: 360, w: 270, h: 40 }
+    ];
+
+    var hazards = [
+        { x: 120, y: 345, count: 4 },
+        { x: 600, y: 345, count: 5 }
+    ];
+
+    var coins = [
+        { x: 80, y: 330, collected: false },
+        { x: 310, y: 280, collected: false },
+        { x: 240, y: 160, collected: false },
+        { x: 440, y: 220, collected: false }
+    ];
+
+    var goal = { x: 740, y: 260, w: 10, h: 100 };
+
+    window.addEventListener(String.fromCharCode(107,101,121,100,111,119,110), function(e) {
+        initAudio();
+        var k = e.key.toLowerCase();
+        
+        if (k === String.fromCharCode(97)) keys.a = true;
+        if (k === String.fromCharCode(100)) keys.d = true;
+        if (k === String.fromCharCode(115)) keys.s = true;
+        if (e.code === String.fromCharCode(83,112,97,99,101) || k === String.fromCharCode(32)) {
+            keys.space = true;
+            e.preventDefault();
+        }
+        
+        if ((state === 1 || state === 2) && (k === String.fromCharCode(114) || e.code === String.fromCharCode(83,112,97,99,101) || k === String.fromCharCode(32))) {
+            score = 0;
+            state = 0;
+            player.reset();
+            for (var i = 0; i < coins.length; i++) coins[i].collected = false;
+        }
+
+        if (k === String.fromCharCode(49)) {
+            keys.a = keys.d = keys.space = keys.s = false;
+            var val = prompt(String.fromCharCode(69,110,116,101,114,32,67,97,116,32,83,112,101,101,100,58), player.speed);
+            if (val && !isNaN(val) && val > 0) player.speed = parseFloat(val);
+        }
+    });
+
+    window.addEventListener(String.fromCharCode(107,101,121,117,112), function(e) {
+        var k = e.key.toLowerCase();
+        if (k === String.fromCharCode(97)) keys.a = false;
+        if (k === String.fromCharCode(100)) keys.d = false;
+        if (k === String.fromCharCode(115)) keys.s = false;
+        if (e.code === String.fromCharCode(83,112,97,99,101) || k === String.fromCharCode(32)) keys.space = false;
+    });
+
+    function killPlayer() {
+        if (state !== 1) {
+            state = 1;
+            playSound(4);
+        }
+    }
+
+    function winGame() {
+        if (state !== 2) {
+            state = 2;
+            playSound(5);
+        }
+    }
+
+    function update() {
+        if (keys.a) { player.vx = -player.speed; player.facing = -1; }
+        else if (keys.d) { player.vx = player.speed; player.facing = 1; }
+        else { player.vx = 0; }
+
+        if (keys.space && player.grounded) {
+            player.vy = player.jump;
+            player.grounded = false;
+            playSound(1);
+        }
+
+        if (keys.s && !player.grounded) {
+            player.vy = 12;
+            playSound(2);
+        }
+
+        player.vy += gravity;
+        player.x += player.vx;
+        player.y += player.vy;
+
+        player.grounded = false;
+        for (var i = 0; i < platforms.length; i++) {
+            var p = platforms[i];
+            if (player.x < p.x + p.w && player.x + player.w > p.x &&
+                player.y + player.h >= p.y && player.y + player.h <= p.y + p.h + player.vy && player.vy >= 0) {
+                player.grounded = true;
+                player.vy = 0;
+                player.y = p.y - player.h;
+            }
+        }
+
+        if (player.x < 0) player.x = 0;
+        if (player.y > canvas.height) killPlayer();
+
+        for (var i = 0; i < hazards.length; i++) {
+            var h = hazards[i];
+            if (player.x < h.x + (h.count * 15) && player.x + player.w > h.x &&
+                player.y < h.y + 15 && player.y + player.h > h.y) {
+                killPlayer();
+            }
+        }
+
+        for (var i = 0; i < coins.length; i++) {
+            var c = coins[i];
+            if (!c.collected && player.x < c.x + 12 && player.x + player.w > c.x &&
+                player.y < c.y + 12 && player.y + player.h > c.y) {
+                c.collected = true;
+                score += 10;
+                playSound(3);
+            }
+        }
+
+        if (player.x < goal.x + goal.w && player.x + player.w > goal.x &&
+            player.y < goal.y + goal.h && player.y + player.h > goal.y) {
+            winGame();
+        }
+    }
+
+    function render() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        ctx.fillStyle = String.fromCharCode(35,50,50,50);
+        for (var i = 0; i < platforms.length; i++) {
+            var p = platforms[i];
+            ctx.fillRect(p.x, p.y, p.w, p.h);
+        }
+
+        for (var i = 0; i < hazards.length; i++) {
+            var h = hazards[i];
+            for (var j = 0; j < h.count; j++) {
+                var sx = h.x + j * 15;
+                ctx.beginPath();
+                ctx.moveTo(sx, h.y + 15);
+                ctx.lineTo(sx + 7.5, h.y);
+                ctx.lineTo(sx + 15, h.y + 15);
+                ctx.fill();
+            }
+        }
+
+        ctx.strokeStyle = String.fromCharCode(35,50,50,50);
+        ctx.lineWidth = 2;
+        for (var i = 0; i < coins.length; i++) {
+            if (!coins[i].collected) ctx.strokeRect(coins[i].x, coins[i].y, 10, 10);
+        }
+
+        ctx.fillStyle = String.fromCharCode(35,50,50,50);
+        ctx.fillRect(goal.x, goal.y, 4, goal.h);
+        ctx.beginPath();
+        ctx.moveTo(goal.x + 4, goal.y);
+        ctx.lineTo(goal.x + 30, goal.y + 15);
+        ctx.lineTo(goal.x + 4, goal.y + 30);
+        ctx.fill();
+
+        ctx.fillRect(player.x, player.y, player.w, player.h);
+        var dir = player.facing;
+        var earX = dir === 1 ? player.x + player.w : player.x;
+        ctx.beginPath();
+        ctx.moveTo(earX - 2 * dir, player.y);
+        ctx.lineTo(earX, player.y - 6);
+        ctx.lineTo(earX - 8 * dir, player.y);
+        ctx.fill();
+
+        ctx.fillStyle = String.fromCharCode(35,50,50,50);
+        ctx.font = String.fromCharCode(98,111,108,100,32,49,54,112,120,32,109,111,110,111,115,112,97,99,101);
+        ctx.textAlign = String.fromCharCode(108,101,102,116);
+        ctx.fillText(String.fromCharCode(83,67,79,82,69,58,32) + score, 20, 30);
+        ctx.fillText(String.fromCharCode(83,80,69,69,68,58,32) + player.speed, 670, 30);
+
+        if (state !== 0) {
+            ctx.fillStyle = String.fromCharCode(114,103,98,97,40,50,53,53,44,50,53,53,44,50,53,53,44,48,46,56,53,41);
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = String.fromCharCode(35,50,50,50);
+            ctx.font = String.fromCharCode(98,111,108,100,32,51,50,112,120,32,109,111,110,111,115,112,97,99,101);
+            ctx.textAlign = String.fromCharCode(99,101,110,116,101,114);
+            ctx.fillText(state === 1 ? String.fromCharCode(71,65,77,69,32,79,86,69,82) : String.fromCharCode(89,79,85,32,87,73,78,33), canvas.width / 2, canvas.height / 2 - 20);
+            ctx.font = String.fromCharCode(49,54,112,120,32,109,111,110,111,115,112,97,99,101);
+            ctx.fillText(String.fromCharCode(70,105,110,97,108,32,83,99,111,114,101,58,32) + score, canvas.width / 2, canvas.height / 2 + 15);
+            ctx.fillText(String.fromCharCode(80,114,101,115,115,32,39,82,39,32,111,114,32,83,80,65,67,69,32,116,111,32,82,101,115,116,97,114,116), canvas.width / 2, canvas.height / 2 + 45);
+        }
+    }
+
+    function loop() {
+        if (state === 0) update();
+        render();
+        requestAnimationFrame(loop);
+    }
+
+    loop();
+})();
+</script>
+</body>
+</html>
