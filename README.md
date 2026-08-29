@@ -1,1 +1,7 @@
 Hi lol
+A = LEFT
+D = RIGHT
+S = DOWN
+SPACE = JUMP
+R = RESET
+1 = CHANGE SPEED
